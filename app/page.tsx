@@ -11,10 +11,15 @@ export default function ShortsLyricsCreator() {
   const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const [bgImage, setBgImage] = useState<string | null>(null);
   const [lyricsText, setLyricsText] = useState<string>(
-    "00:00 Intro...\n00:05 Berjalan menyusuri malam\n00:09 Menghitung bintang yang berpesan\n00:14 Apakah kau juga merasakan hal yang sama?"
+    "Intro...\nBerjalan menyusuri malam\nMenghitung bintang yang berpesan\nApakah kau juga merasakan hal yang sama?"
   );
   const [parsedLyrics, setParsedLyrics] = useState<LyricLine[]>([]);
   const [currentLineIndex, setCurrentLineIndex] = useState(0);
+
+  // State khusus Tap-to-Sync
+  const [isSyncMode, setIsSyncMode] = useState(false);
+  const [syncIndex, setSyncIndex] = useState(0);
+  const [tempLines, setTempLines] = useState<LyricLine[]>([]);
 
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -28,20 +33,75 @@ export default function ShortsLyricsCreator() {
     if (file) setBgImage(URL.createObjectURL(file));
   };
 
+  // Format detik ke [mm:ss.xx]
+  const formatTimestamp = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = (seconds % 60).toFixed(2).padStart(5, '0');
+    return `${String(mins).padStart(2, '0')}:${secs}`;
+  };
+
+  // Parse manual jika user mengetik timestamp sendiri (contoh: 00:05 atau 00:05.20)
   const parseLyrics = () => {
     const lines = lyricsText.split('\n');
     const result: LyricLine[] = [];
 
     lines.forEach((line) => {
-      const match = line.match(/(?:\[?(\d{2}):(\d{2})\]?\s*)(.*)/);
+      const match = line.match(/(?:\[?(\d{2}):(\d{2}(?:\.\d+)?)\]?\s*)(.*)/);
       if (match) {
         const minutes = parseInt(match[1], 10);
-        const seconds = parseInt(match[2], 10);
+        const seconds = parseFloat(match[2]);
         result.push({ time: minutes * 60 + seconds, text: match[3] });
       }
     });
 
     setParsedLyrics(result);
+    setCurrentLineIndex(0);
+  };
+
+  // 1. Mulai mode Tap-to-Sync dari teks lirik biasa
+  const startTapSync = () => {
+    const cleanLines = lyricsText
+      .split('\n')
+      .map((line) => line.replace(/^\[?\d{2}:\d{2}(?:\.\d+)?\]?\s*/, '').trim())
+      .filter((line) => line.length > 0)
+      .map((text) => ({ time: -1, text }));
+
+    if (cleanLines.length === 0) return;
+
+    setTempLines(cleanLines);
+    setSyncIndex(0);
+    setIsSyncMode(true);
+
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play();
+    }
+  };
+
+  // 2. Rekam waktu saat tombol TAP ditekan di HP
+  const handleTap = () => {
+    if (!audioRef.current || syncIndex >= tempLines.length) return;
+
+    const currentTime = Number(audioRef.current.currentTime.toFixed(2));
+    const updated = tempLines.map((item, idx) =>
+      idx === syncIndex ? { ...item, time: currentTime } : item
+    );
+
+    setTempLines(updated);
+    const nextIndex = syncIndex + 1;
+    setSyncIndex(nextIndex);
+
+    // Update otomatis ke textarea & canvas preview jika sudah selesai semua baris
+    const validSynced = updated.filter((item) => item.time >= 0);
+    setParsedLyrics(validSynced);
+
+    if (nextIndex >= tempLines.length) {
+      const formattedText = updated
+        .map((item) => `${formatTimestamp(item.time)} ${item.text}`)
+        .join('\n');
+      setLyricsText(formattedText);
+      setIsSyncMode(false);
+    }
   };
 
   const handleTimeUpdate = () => {
@@ -49,7 +109,7 @@ export default function ShortsLyricsCreator() {
     const currentTime = audioRef.current.currentTime;
 
     const activeIndex = parsedLyrics.findIndex((item, index) => {
-      const nextTime = parsedLyrics[index + 1]?.time || Infinity;
+      const nextTime = parsedLyrics[index + 1]?.time ?? Infinity;
       return currentTime >= item.time && currentTime < nextTime;
     });
 
@@ -112,7 +172,7 @@ export default function ShortsLyricsCreator() {
                 );
               })
             ) : (
-              <p className="text-slate-400 text-xs italic">Apply lyrics to preview</p>
+              <p className="text-slate-400 text-xs italic">Tap-to-Sync atau Apply lirik untuk preview</p>
             )}
           </div>
         </div>
@@ -155,21 +215,76 @@ export default function ShortsLyricsCreator() {
           />
         </div>
 
-        <div>
-          <label className="block text-xs font-medium mb-1 text-slate-300">3. Paste Lirik & Timestamp (mm:ss)</label>
-          <textarea
-            rows={6}
-            value={lyricsText}
-            onChange={(e) => setLyricsText(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
-          />
-          <button
-            onClick={parseLyrics}
-            className="mt-2 w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 font-semibold rounded-lg text-sm transition shadow-lg shadow-indigo-600/30"
-          >
-            Apply to Canvas
-          </button>
-        </div>
+        {!isSyncMode ? (
+          <div>
+            <label className="block text-xs font-medium mb-1 text-slate-300">
+              3. Paste Lirik (Bisa tanpa waktu, lalu klik Tap-to-Sync)
+            </label>
+            <textarea
+              rows={6}
+              value={lyricsText}
+              onChange={(e) => setLyricsText(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+            />
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <button
+                onClick={startTapSync}
+                disabled={!audioSrc}
+                className="py-2.5 bg-pink-600 hover:bg-pink-500 disabled:opacity-40 font-semibold rounded-lg text-sm transition shadow-lg shadow-pink-600/30"
+              >
+                Tap-to-Sync
+              </button>
+              <button
+                onClick={parseLyrics}
+                className="py-2.5 bg-indigo-600 hover:bg-indigo-500 font-semibold rounded-lg text-sm transition shadow-lg shadow-indigo-600/30"
+              >
+                Apply Manual
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* MODE TAP-TO-SYNC KHUSUS JEMPOL DI HP */
+          <div className="space-y-3 bg-slate-950 p-3 rounded-xl border border-pink-500/40">
+            <div className="flex justify-between items-center text-xs text-pink-300 font-medium">
+              <span>Ketuk tombol saat lirik masuk:</span>
+              <span>{syncIndex + 1} / {tempLines.length}</span>
+            </div>
+
+            <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+              {tempLines.map((line, idx) => (
+                <div
+                  key={idx}
+                  className={`p-2 rounded text-xs flex justify-between items-center ${
+                    idx === syncIndex
+                      ? 'bg-pink-600/30 border border-pink-500 text-white font-bold'
+                      : idx < syncIndex
+                      ? 'text-slate-500'
+                      : 'text-slate-300'
+                  }`}
+                >
+                  <span className="truncate pr-2">{line.text}</span>
+                  <span className="font-mono text-[11px] shrink-0">
+                    {line.time >= 0 ? formatTimestamp(line.time) : '--:--'}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={handleTap}
+              className="w-full py-5 bg-pink-600 active:scale-95 hover:bg-pink-500 text-white font-extrabold text-base rounded-xl shadow-lg shadow-pink-600/40 transition"
+            >
+              TAP LIRIK SEKARANG
+            </button>
+
+            <button
+              onClick={() => setIsSyncMode(false)}
+              className="w-full py-1.5 text-xs text-slate-400 hover:text-white"
+            >
+              Batal / Kembali
+            </button>
+          </div>
+        )}
       </div>
 
     </div>
